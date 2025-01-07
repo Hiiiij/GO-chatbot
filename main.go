@@ -1,74 +1,122 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
 )
 
-var db = make(map[string]string)
+// Configuration constants
+const (
+	OpenAIAPIKey    = "your_openai_api_key"
+	ChatGPTEndpoint = "https://api.openai.com/v1/chat/completions"
+	WhisperEndpoint = "https://api.openai.com/v1/audio/transcriptions"
+	S3BucketName    = "your_s3_bucket_name"
+	APIKey          = "your_secret_api_key"
+)
 
-func setupRouter() *gin.Engine {
-	// Disable Console Color
-	// gin.DisableConsoleColor()
-	r := gin.Default()
-
-	// Ping test
-	r.GET("/ping", func(c *gin.Context) {
-		c.String(http.StatusOK, "pong")
-	})
-
-	// Get user value
-	r.GET("/user/:name", func(c *gin.Context) {
-		user := c.Params.ByName("name")
-		value, ok := db[user]
-		if ok {
-			c.JSON(http.StatusOK, gin.H{"user": user, "value": value})
-		} else {
-			c.JSON(http.StatusOK, gin.H{"user": user, "status": "no value"})
-		}
-	})
-
-	// Authorized group (uses gin.BasicAuth() middleware)
-	// Same than:
-	// authorized := r.Group("/")
-	// authorized.Use(gin.BasicAuth(gin.Credentials{
-	//	  "foo":  "bar",
-	//	  "manu": "123",
-	//}))
-	authorized := r.Group("/", gin.BasicAuth(gin.Accounts{
-		"foo":  "bar", // user:foo password:bar
-		"manu": "123", // user:manu password:123
-	}))
-
-	/* example curl for /admin with basicauth header
-	   Zm9vOmJhcg== is base64("foo:bar")
-
-		curl -X POST \
-	  	http://localhost:8080/admin \
-	  	-H 'authorization: Basic Zm9vOmJhcg==' \
-	  	-H 'content-type: application/json' \
-	  	-d '{"value":"bar"}'
-	*/
-	authorized.POST("admin", func(c *gin.Context) {
-		user := c.MustGet(gin.AuthUserKey).(string)
-
-		// Parse JSON
-		var json struct {
-			Value string `json:"value" binding:"required"`
-		}
-
-		if err := c.Bind(&json); err == nil {
-			db[user] = json.Value
-			c.JSON(http.StatusOK, gin.H{"status": "ok"})
-		}
-	})
-
-	return r
-}
+// Logger setup
+var logger = logrus.New()
 
 func main() {
-	r := setupRouter()
-	// Listen and Server in 0.0.0.0:8080
-	r.Run(":8080")
+	// Initialize Gin router
+	router := gin.Default()
+
+	// Middleware for API key authentication
+	router.Use(apiKeyMiddleware)
+
+	// Define endpoints
+	router.POST("/chat", handleChat)
+	router.GET("/status", handleStatus)
+
+	// Start the server
+	router.Run(":8080")
+}
+
+// handleChat processes text-based queries
+func handleChat(c *gin.Context) {
+	var chatRequest struct {
+		Message string `json:"message" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&chatRequest); err != nil {
+		logger.Error("Invalid chat request: ", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	// Call ChatGPT API
+	response, err := callChatGPT(chatRequest.Message)
+	if err != nil {
+		logger.Error("Failed to call ChatGPT API: ", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "ChatGPT API call failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": response})
+}
+
+// handleStatus provides a health check endpoint
+func handleStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "OK"})
+}
+
+// callChatGPT makes requests to the OpenAI ChatGPT API
+func callChatGPT(userMessage string) (string, error) {
+	requestBody := map[string]interface{}{
+		"model": "gpt-3.5-turbo",
+		"messages": []map[string]string{
+			{"role": "system", "content": "You are a helpful assistant."},
+			{"role": "user", "content": userMessage},
+		},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", ChatGPTEndpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+OpenAIAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var responseBody map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&responseBody); err != nil {
+		return "", err
+	}
+
+	if choices, ok := responseBody["choices"].([]interface{}); ok && len(choices) > 0 {
+		if message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{}); ok {
+			return message["content"].(string), nil
+		}
+	}
+
+	return "", fmt.Errorf("no response from ChatGPT")
+}
+
+
+// Middleware for API key authentication
+func apiKeyMiddleware(c *gin.Context) {
+	clientKey := c.GetHeader("X-API-KEY")
+	if clientKey != APIKey {
+		logger.Warn("Unauthorized access attempt")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		c.Abort()
+		return
+	}
+	c.Next()
 }
