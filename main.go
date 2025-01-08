@@ -6,23 +6,25 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
-
-// Logger setup
-var logger = logrus.New()
 
 func init() {
 	// Load environment variables from .env file
 	if err := godotenv.Load(); err != nil {
-		logger.Fatal("Error loading .env file")
+		log.Fatal().Msg("Error loading .env file")
 	}
 }
 
 func main() {
+	// Set up zerolog to output pretty logs during development
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
 	// Initialize Gin router
 	router := gin.Default()
 
@@ -37,7 +39,6 @@ func main() {
 	router.Run(":8080")
 }
 
-// Update your constants to read from environment variables
 const (
 	ChatGPTEndpoint = "https://api.openai.com/v1/chat/completions"
 )
@@ -47,11 +48,10 @@ var (
 	APIKey       = os.Getenv("API_KEY")
 )
 
-// Middleware for API key authentication
 func apiKeyMiddleware(c *gin.Context) {
 	clientKey := c.GetHeader("X-API-KEY")
 	if clientKey != APIKey {
-		logger.Warn("Unauthorized access attempt")
+		log.Warn().Msg("Unauthorized access attempt")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		c.Abort()
 		return
@@ -59,21 +59,19 @@ func apiKeyMiddleware(c *gin.Context) {
 	c.Next()
 }
 
-// handleChat processes text-based queries
 func handleChat(c *gin.Context) {
 	var chatRequest struct {
 		Message string `json:"message" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&chatRequest); err != nil {
-		logger.Error("Invalid chat request: ", err)
+		log.Error().Err(err).Msg("Invalid chat request")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
 
-	// Call ChatGPT API
 	response, err := callChatGPT(chatRequest.Message)
 	if err != nil {
-		logger.Error("Failed to call ChatGPT API: ", err)
+		log.Error().Err(err).Msg("Failed to call ChatGPT API")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ChatGPT API call failed"})
 		return
 	}
@@ -81,12 +79,10 @@ func handleChat(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"response": response})
 }
 
-// handleStatus provides a health check endpoint
 func handleStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "OK"})
 }
 
-// callChatGPT makes requests to the OpenAI ChatGPT API
 func callChatGPT(userMessage string) (string, error) {
 	requestBody := map[string]interface{}{
 		"model": "gpt-3.5-turbo",
@@ -108,7 +104,7 @@ func callChatGPT(userMessage string) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+OpenAIAPIKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
