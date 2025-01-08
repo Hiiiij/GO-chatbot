@@ -4,24 +4,23 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
-)
-
-// Configuration constants
-const (
-	OpenAIAPIKey    = "your_openai_api_key"
-	ChatGPTEndpoint = "https://api.openai.com/v1/chat/completions"
-	WhisperEndpoint = "https://api.openai.com/v1/audio/transcriptions"
-	S3BucketName    = "your_s3_bucket_name"
-	APIKey          = "your_secret_api_key"
 )
 
 // Logger setup
 var logger = logrus.New()
+
+func init() {
+	// Load environment variables from .env file
+	if err := godotenv.Load(); err != nil {
+		logger.Fatal("Error loading .env file")
+	}
+}
 
 func main() {
 	// Initialize Gin router
@@ -36,6 +35,28 @@ func main() {
 
 	// Start the server
 	router.Run(":8080")
+}
+
+// Update your constants to read from environment variables
+const (
+	ChatGPTEndpoint = "https://api.openai.com/v1/chat/completions"
+)
+
+var (
+	OpenAIAPIKey = os.Getenv("OPENAI_API_KEY")
+	APIKey       = os.Getenv("API_KEY")
+)
+
+// Middleware for API key authentication
+func apiKeyMiddleware(c *gin.Context) {
+	clientKey := c.GetHeader("X-API-KEY")
+	if clientKey != APIKey {
+		logger.Warn("Unauthorized access attempt")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		c.Abort()
+		return
+	}
+	c.Next()
 }
 
 // handleChat processes text-based queries
@@ -106,17 +127,4 @@ func callChatGPT(userMessage string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no response from ChatGPT")
-}
-
-
-// Middleware for API key authentication
-func apiKeyMiddleware(c *gin.Context) {
-	clientKey := c.GetHeader("X-API-KEY")
-	if clientKey != APIKey {
-		logger.Warn("Unauthorized access attempt")
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		c.Abort()
-		return
-	}
-	c.Next()
 }
