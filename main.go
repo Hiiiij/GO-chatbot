@@ -21,12 +21,17 @@ func init() {
 	}
 }
 
+
 func main() {
 	// Set up zerolog to output pretty logs during development
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
 	// Initialize Gin router
 	router := gin.Default()
+
+	// Fix trusted proxies warning
+	router.SetTrustedProxies(nil)
 
 	// Middleware for API key authentication
 	router.Use(apiKeyMiddleware)
@@ -39,6 +44,7 @@ func main() {
 	router.Run(":8080")
 }
 
+
 const (
 	ChatGPTEndpoint = "https://api.openai.com/v1/chat/completions"
 )
@@ -50,6 +56,8 @@ var (
 
 func apiKeyMiddleware(c *gin.Context) {
 	clientKey := c.GetHeader("X-API-KEY")
+	log.Info().Msgf("Received API key: %s", clientKey)
+
 	if clientKey != APIKey {
 		log.Warn().Msg("Unauthorized access attempt")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -58,6 +66,7 @@ func apiKeyMiddleware(c *gin.Context) {
 	}
 	c.Next()
 }
+
 
 func handleChat(c *gin.Context) {
 	var chatRequest struct {
@@ -107,14 +116,18 @@ func callChatGPT(userMessage string) (string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Debug().Msg("Request failed")
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	var responseBody map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&responseBody); err != nil {
+		log.Err(err).Msg("Decoding of response failed")
 		return "", err
 	}
+
+	log.Debug().Msg(fmt.Sprintf("%v", responseBody))
 
 	if choices, ok := responseBody["choices"].([]interface{}); ok && len(choices) > 0 {
 		if message, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{}); ok {
