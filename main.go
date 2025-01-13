@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go-bot/models"
 	"net/http"
 	"os"
 	"time"
@@ -28,11 +29,9 @@ var (
 )
 
 func init() {
-	// Load environment variables
 	if err := godotenv.Load(); err != nil {
 		log.Fatal().Msg("Error loading .env file")
 	}
-
 	OpenAIAPIKey = os.Getenv("OPENAI_API_KEY")
 	APIKey = os.Getenv("API_KEY")
 
@@ -42,27 +41,18 @@ func init() {
 }
 
 func main() {
-	// Set up logging
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
-	// Connect to MongoDB
 	if err := connectToMongoDB(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to connect to MongoDB")
 	}
 
-	// Initialize Gin router
 	router := gin.Default()
 	router.SetTrustedProxies(nil)
-
-	// Middleware for API key authentication
 	router.Use(apiKeyMiddleware)
-
-	// Define endpoints
 	router.POST("/chat", handleChat)
 	router.GET("/status", handleStatus)
-
-	// Start the server
 	log.Info().Msg("Server running on port 8080")
 	router.Run(":8080")
 }
@@ -74,23 +64,17 @@ func connectToMongoDB() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
-
-	// Check the connection
 	if err := client.Ping(context.TODO(), nil); err != nil {
 		return fmt.Errorf("failed to ping MongoDB: %w", err)
 	}
-
-	// Access the database and collection
 	chatCollection = client.Database("go-chat-backed").Collection("chatSchema")
 	log.Info().Msg("Connected to MongoDB")
 	return nil
 }
 
-
 func apiKeyMiddleware(c *gin.Context) {
 	clientKey := c.GetHeader("X-API-KEY")
 	log.Info().Str("received_key", clientKey).Msg("API key received")
-
 	if clientKey != APIKey {
 		log.Warn().Msg("Unauthorized access attempt")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -98,6 +82,10 @@ func apiKeyMiddleware(c *gin.Context) {
 		return
 	}
 	c.Next()
+}
+func handleStatus(c *gin.Context) {
+    log.Info().Msg("Status check received")
+    c.JSON(http.StatusOK, gin.H{"status": "OK"})
 }
 
 func handleChat(c *gin.Context) {
@@ -112,15 +100,28 @@ func handleChat(c *gin.Context) {
 		return
 	}
 
-	// Call ChatGPT API
-	response, err := callChatGPT(chatRequest.Message)
+	chatHistory, err := getChatHistoryFromDB(chatRequest.UserID)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to fetch chat history")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chat history"})
+		return
+	}
+
+	messages := []map[string]string{
+		{"role": "system", "content": "You are a helpful assistant."},
+	}
+	for _, chat := range chatHistory {
+		messages = append(messages, map[string]string{"role": "user", "content": chat.Message})
+	}
+	messages = append(messages, map[string]string{"role": "user", "content": chatRequest.Message})
+
+	response, err := callChatGPTWithHistory(messages)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to call ChatGPT API")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ChatGPT API call failed"})
 		return
 	}
 
-	// Save chat message and response to MongoDB
 	err = saveChatToDB(chatRequest.UserID, chatRequest.Message, response)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to save chat to database")
@@ -128,33 +129,13 @@ func handleChat(c *gin.Context) {
 		return
 	}
 
-	// Retrieve chat history for the user
-	chatHistory, err := getChatHistoryFromDB(chatRequest.UserID)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to retrieve chat history")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve chat history"})
-		return
-	}
-
-	// Respond with the ChatGPT response and chat history
-	c.JSON(http.StatusOK, gin.H{
-		"response":    response,
-		"chatHistory": chatHistory,
-	})
+	c.JSON(http.StatusOK, gin.H{"response": response})
 }
 
-func handleStatus(c *gin.Context) {
-	log.Info().Msg("Status check received")
-	c.JSON(http.StatusOK, gin.H{"status": "OK"})
-}
-
-func callChatGPT(userMessage string) (string, error) {
+func callChatGPTWithHistory(messages []map[string]string) (string, error) {
 	requestBody := map[string]interface{}{
-		"model": "gpt-4-turbo",
-		"messages": []map[string]string{
-			{"role": "system", "content": "You are a helpful assistant."},
-			{"role": "user", "content": userMessage},
-		},
+		"model":    "gpt-4-turbo",
+		"messages": messages,
 	}
 
 	jsonData, err := json.Marshal(requestBody)
@@ -198,28 +179,37 @@ func callChatGPT(userMessage string) (string, error) {
 }
 
 func saveChatToDB(userID, message, response string) error {
-	doc := bson.D{
-		{Key: "user_id", Value: userID},
-		{Key: "message", Value: message},
-		{Key: "response", Value: response},
-		{Key: "timestamp", Value: time.Now()},
+	chatMessage := models.ChatMessage{
+		UserID:    userID,
+		Message:   message,
+		Response:  response,
+		Timestamp: time.Now(),
 	}
-	_, err := chatCollection.InsertOne(context.TODO(), doc)
+
+	_, err := chatCollection.InsertOne(context.TODO(), chatMessage)
 	return err
 }
 
-
-func getChatHistoryFromDB(userID string) ([]bson.M, error) {
+func getChatHistoryFromDB(userID string) ([]models.ChatMessage, error) {
 	filter := bson.M{"user_id": userID}
-	cursor, err := chatCollection.Find(context.TODO(), filter)
+  opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: -1}})
+
+
+	cursor, err := chatCollection.Find(context.TODO(), filter, opts)
 	if err != nil {
 		return nil, err
 	}
 	defer cursor.Close(context.TODO())
 
-	var chatHistory []bson.M
+	var chatHistory []models.ChatMessage
 	if err := cursor.All(context.TODO(), &chatHistory); err != nil {
 		return nil, err
 	}
+
+	for i, j := 0, len(chatHistory)-1; i < j; i, j = i+1, j-1 {
+		chatHistory[i], chatHistory[j] = chatHistory[j], chatHistory[i]
+	}
 	return chatHistory, nil
 }
+
+
