@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,40 +13,43 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const ChatGPTEndpoint = "https://api.openai.com/v1/chat/completions"
 
 var (
-	OpenAIAPIKey string
-	APIKey       string
+	client        *mongo.Client
+	chatCollection *mongo.Collection
+	OpenAIAPIKey  string
+	APIKey        string
 )
 
 func init() {
-	// Load environment variables from .env file
+	// Load environment variables
 	if err := godotenv.Load(); err != nil {
 		log.Fatal().Msg("Error loading .env file")
 	}
 
-	// Get API keys from environment variables
 	OpenAIAPIKey = os.Getenv("OPENAI_API_KEY")
 	APIKey = os.Getenv("API_KEY")
 
-	// Check if required environment variables are set
-	if OpenAIAPIKey == "" {
-		log.Fatal().Msg("Missing OPENAI_API_KEY environment variable")
+	if OpenAIAPIKey == "" || APIKey == "" {
+		log.Fatal().Msg("Missing required environment variables: OPENAI_API_KEY or API_KEY")
 	}
-	if APIKey == "" {
-		log.Fatal().Msg("Missing API_KEY environment variable")
-	}
-
-	log.Info().Msg("Environment variables loaded successfully")
 }
 
 func main() {
-	// Set up ZeroLog for structured logging
+	// Set up logging
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
+	// Connect to MongoDB
+	if err := connectToMongoDB(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to connect to MongoDB")
+	}
 
 	// Initialize Gin router
 	router := gin.Default()
@@ -63,6 +67,26 @@ func main() {
 	router.Run(":8080")
 }
 
+func connectToMongoDB() error {
+	clientOptions := options.Client().ApplyURI(os.Getenv("MONGO_URI"))
+	var err error
+	client, err = mongo.Connect(context.TODO(), clientOptions)
+	if err != nil {
+		return fmt.Errorf("failed to connect to MongoDB: %w", err)
+	}
+
+	// Check the connection
+	if err := client.Ping(context.TODO(), nil); err != nil {
+		return fmt.Errorf("failed to ping MongoDB: %w", err)
+	}
+
+	// Access the database and collection
+	chatCollection = client.Database("go-chat-backed").Collection("chatSchema")
+	log.Info().Msg("Connected to MongoDB")
+	return nil
+}
+
+
 func apiKeyMiddleware(c *gin.Context) {
 	clientKey := c.GetHeader("X-API-KEY")
 	log.Info().Str("received_key", clientKey).Msg("API key received")
@@ -78,8 +102,10 @@ func apiKeyMiddleware(c *gin.Context) {
 
 func handleChat(c *gin.Context) {
 	var chatRequest struct {
+		UserID  string `json:"user_id" binding:"required"`
 		Message string `json:"message" binding:"required"`
 	}
+
 	if err := c.ShouldBindJSON(&chatRequest); err != nil {
 		log.Error().Err(err).Msg("Invalid chat request")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
@@ -94,8 +120,27 @@ func handleChat(c *gin.Context) {
 		return
 	}
 
-	// Respond with the ChatGPT response
-	c.JSON(http.StatusOK, gin.H{"response": response})
+	// Save chat message and response to MongoDB
+	err = saveChatToDB(chatRequest.UserID, chatRequest.Message, response)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to save chat to database")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save chat history"})
+		return
+	}
+
+	// Retrieve chat history for the user
+	chatHistory, err := getChatHistoryFromDB(chatRequest.UserID)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to retrieve chat history")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve chat history"})
+		return
+	}
+
+	// Respond with the ChatGPT response and chat history
+	c.JSON(http.StatusOK, gin.H{
+		"response":    response,
+		"chatHistory": chatHistory,
+	})
 }
 
 func handleStatus(c *gin.Context) {
@@ -150,4 +195,31 @@ func callChatGPT(userMessage string) (string, error) {
 
 	log.Warn().Msg("No valid response from ChatGPT API")
 	return "", fmt.Errorf("no response from ChatGPT")
+}
+
+func saveChatToDB(userID, message, response string) error {
+	doc := bson.D{
+		{Key: "user_id", Value: userID},
+		{Key: "message", Value: message},
+		{Key: "response", Value: response},
+		{Key: "timestamp", Value: time.Now()},
+	}
+	_, err := chatCollection.InsertOne(context.TODO(), doc)
+	return err
+}
+
+
+func getChatHistoryFromDB(userID string) ([]bson.M, error) {
+	filter := bson.M{"user_id": userID}
+	cursor, err := chatCollection.Find(context.TODO(), filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.TODO())
+
+	var chatHistory []bson.M
+	if err := cursor.All(context.TODO(), &chatHistory); err != nil {
+		return nil, err
+	}
+	return chatHistory, nil
 }
