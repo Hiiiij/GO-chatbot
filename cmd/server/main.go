@@ -12,21 +12,20 @@ import (
 )
 
 func main() {
+	// set logging level to debug and use console output
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr}) // Fix requires os.Stderr
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
-	// load configuration
-	cfg := config.LoadConfig() // Fix: Remove the second return value `err`
+	cfg := config.LoadConfig()
 
-	// connect to MongoDB
 	if err := db.Connect(cfg.MongoURI); err != nil {
-		log.Fatal().Err(err).Msg("Failed to connect to MongoDB")
+		log.Fatal().Err(err).Msg("failed to connect to mongodb")
 	}
 
-	// setup Gin router
 	router := gin.Default()
 	api.RegisterRoutes(router)
 
-	log.Info().Msgf("Server running on port %s", cfg.Port) // use `cfg.Port` dynamically
-	router.Run(":" + cfg.Port)                             // use configured port
+	// start http server on configured port
+	log.Info().Msgf("server running on port %s", cfg.Port)
+	router.Run(":" + cfg.Port)
 }
