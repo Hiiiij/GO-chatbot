@@ -11,26 +11,27 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var chatCollection *mongo.Collection
+var chatCollection *mongo.Collection // chat messages collection
+var client *mongo.Client             // mongodb client
 
-// global MongoDB client
-var client *mongo.Client
-
-// Connect initializes the MongoDB connection and sets up the collection
+// connect to mongodb and set up collection
 func Connect(mongoURI string) error {
 	clientOptions := options.Client().ApplyURI(mongoURI)
-	client, err := mongo.Connect(context.TODO(), clientOptions)
+	var err error
+	client, err = mongo.Connect(context.TODO(), clientOptions)
 	if err != nil {
 		return err
 	}
+
 	if err := client.Ping(context.TODO(), nil); err != nil {
 		return err
 	}
+
 	chatCollection = client.Database("go-chat-backend").Collection("chatSchema")
 	return nil
 }
 
-// Disconnect closes the MongoDB connection
+// disconnect from mongodb
 func Disconnect() error {
 	if client != nil {
 		return client.Disconnect(context.TODO())
@@ -38,20 +39,29 @@ func Disconnect() error {
 	return nil
 }
 
-// SaveChat inserts a new chat message into the MongoDB collection.
+// save chat message to mongodb
 func SaveChat(userID, message, response string) error {
+	if chatCollection == nil {
+		return mongo.ErrClientDisconnected
+	}
+
 	chat := models.ChatMessage{
 		UserID:    userID,
 		Message:   message,
 		Response:  response,
 		Timestamp: time.Now(),
 	}
+
 	_, err := chatCollection.InsertOne(context.TODO(), chat)
 	return err
 }
 
-// GetChatHistory retrieves all chat messages for a given user ID from MongoDB.
+// get chat history by user id
 func GetChatHistory(userID string) ([]models.ChatMessage, error) {
+	if chatCollection == nil {
+		return nil, mongo.ErrClientDisconnected
+	}
+
 	filter := bson.M{"user_id": userID}
 	cursor, err := chatCollection.Find(context.TODO(), filter)
 	if err != nil {
