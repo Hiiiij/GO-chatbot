@@ -2,12 +2,7 @@ package service
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
-	"net/http"
-	"os"
-	"time"
-
 	"go-bot/internal/db"
 	"go-bot/internal/models"
 	"go-bot/internal/util"
@@ -15,7 +10,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// represents a single message chunk from the OpenAI streaming response
 type ChatGPTStreamBody struct {
 	Choices []struct {
 		Delta struct {
@@ -24,61 +18,47 @@ type ChatGPTStreamBody struct {
 	} `json:"choices"`
 }
 
-// handles streaming requests by interacting with OpenAI's API.
 func ProcessStream(request models.ChatRequest) (<-chan string, error) {
-	// Auto-generate UserID if not provided
 	if request.UserID == "" {
 		request.UserID = util.GenerateUserID()
 		log.Debug().Msgf("Generated UserID: %s", request.UserID)
 	}
 
-	// fetch chat history
 	chatHistory, err := db.GetChatHistory(request.UserID)
 	if err != nil {
 		return nil, err
 	}
 
-	// build OpenAI payload
-	payload := BuildChatGPTPayload(request.Message, chatHistory)
+	payload := BuildChatGPTPayload(request.Message, chatHistory, "You are a helpful assistant.")
 	payload.Stream = true
+	log.Debug().Interface("payload", payload).Msg("Payload for streaming request")
 
-	jsonData, err := json.Marshal(payload)
+	resp, err := util.SendOpenAIRequest(payload, true)
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to send streaming request to OpenAI")
 		return nil, err
 	}
 
-	// send request to OpenAI
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENAI_API_KEY"))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	// stream response back to client
 	streamChannel := make(chan string)
 	go func() {
 		defer resp.Body.Close()
 		defer close(streamChannel)
 
 		scanner := bufio.NewScanner(resp.Body)
+		var aggregatedResponse string
+
 		for scanner.Scan() {
 			line := scanner.Text()
+			log.Debug().Str("raw_line", line).Msg("Raw streamed data from OpenAI")
 
-			// skip invalid lines
+			// skip lines that don't start with "data:"
 			if len(line) < 6 || line[:5] != "data:" {
 				continue
 			}
 
-			// remove "data:" prefix and decode JSON
 			jsonData := line[5:]
 			if jsonData == "[DONE]" {
+				log.Debug().Msg("Stream completed")
 				break
 			}
 
@@ -88,47 +68,38 @@ func ProcessStream(request models.ChatRequest) (<-chan string, error) {
 				continue
 			}
 
-			// send chunk content to client
-			if len(streamBody.Choices) > 0 {
-				content := streamBody.Choices[0].Delta.Content
-				streamChannel <- content
+			// each choice in the response
+			for _, choice := range streamBody.Choices {
+				content := choice.Delta.Content
+				if content != "" {
+					log.Debug().Str("chunk_content", content).Msg("Received chunk content")
+					aggregatedResponse += content
+					streamChannel <- content
+				}
 			}
 		}
+
+		log.Debug().Str("aggregated_response", aggregatedResponse).Msg("Final aggregated response")
 	}()
 
 	return streamChannel, nil
 }
 
-// handle non-streaming chat requests
 func ProcessChat(request models.ChatRequest) (string, error) {
-	// auto-generate UserID if not provided
 	if request.UserID == "" {
 		request.UserID = util.GenerateUserID()
 		log.Debug().Msgf("Generated UserID: %s", request.UserID)
 	}
 
-	// fetch from db
 	chatHistory, err := db.GetChatHistory(request.UserID)
 	if err != nil {
 		return "", err
 	}
 
-	// build payload and send request to OpenAI API
-	payload := BuildChatGPTPayload(request.Message, chatHistory)
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
+	payload := BuildChatGPTPayload(request.Message, chatHistory, "You are a helpful assistant.")
+	log.Debug().Interface("payload", payload).Msg("Built payload for chat request")
 
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENAI_API_KEY"))
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := util.SendOpenAIRequest(payload, false)
 	if err != nil {
 		return "", err
 	}
@@ -143,6 +114,7 @@ func ProcessChat(request models.ChatRequest) (string, error) {
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&responseBody); err != nil {
+		log.Error().Err(err).Msg("Failed to decode OpenAI API response")
 		return "", err
 	}
 

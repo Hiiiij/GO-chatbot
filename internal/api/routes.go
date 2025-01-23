@@ -3,15 +3,15 @@ package api
 import "github.com/gin-gonic/gin"
 
 func RegisterRoutes(router *gin.Engine) {
-	// Public routes
-	router.GET("/status", handleStatus) // Health check route is public
+	// public routes
+	router.GET("/status", handleStatus) // health check/  public route
 
-	// Protected routes/ middleware applied
+	//add protected routes with middleware
 	protected := router.Group("/")
-	protected.Use(APIKeyMiddleware())        // Apply API key validation
-	protected.Use(RequestLoggerMiddleware()) // Apply request logging
+	protected.Use(APIKeyMiddleware())        // apply API key validation
+	protected.Use(RequestLoggerMiddleware()) // apply request logging
 	{
-		protected.POST("/chat", handleChat)     // Chat requests
-		protected.POST("/stream", handleStream) // Streaming chat responses
+		protected.POST("/chat", handleChat)     // get full chat response
+		protected.POST("/stream", handleStream) // get streaming chat responses
 	}
 }

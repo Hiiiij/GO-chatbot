@@ -4,6 +4,8 @@ import (
 	"go-bot/internal/api"
 	"go-bot/internal/config"
 	"go-bot/internal/db"
+	"go-bot/internal/models"
+	"go-bot/internal/service"
 	"os"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +26,15 @@ func main() {
 
 	router := gin.Default()
 	api.RegisterRoutes(router)
+
+	request := models.ChatRequest{
+		UserID:  "test_user",
+		Message: "What is the capital of France?",
+	}
+	_, err := service.ProcessStream(request)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to process stream")
+	}
 
 	// start http server on configured port
 	log.Info().Msgf("server running on port %s", cfg.Port)
