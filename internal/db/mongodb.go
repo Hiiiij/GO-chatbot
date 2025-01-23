@@ -12,7 +12,7 @@ import (
 )
 
 var chatCollection *mongo.Collection // chat messages collection
-var client *mongo.Client             // mongodb client
+var client *mongo.Client             // MongoDB client
 
 // connect to mongodb and set up collection
 func Connect(mongoURI string) error {
@@ -56,14 +56,15 @@ func SaveChat(userID, message, response string) error {
 	return err
 }
 
-// get chat history by user id
-func GetChatHistory(userID string) ([]models.ChatMessage, error) {
+func GetChatHistory(userID string, limit int) ([]models.ChatMessage, error) {
 	if chatCollection == nil {
 		return nil, mongo.ErrClientDisconnected
 	}
 
 	filter := bson.M{"user_id": userID}
-	cursor, err := chatCollection.Find(context.TODO(), filter)
+	findOptions := options.Find().SetSort(bson.M{"timestamp": -1}).SetLimit(int64(limit))
+
+	cursor, err := chatCollection.Find(context.TODO(), filter, findOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -73,5 +74,11 @@ func GetChatHistory(userID string) ([]models.ChatMessage, error) {
 	if err := cursor.All(context.TODO(), &chats); err != nil {
 		return nil, err
 	}
+
+	// reverse the order to send oldest messages first
+	for i, j := 0, len(chats)-1; i < j; i, j = i+1, j-1 {
+		chats[i], chats[j] = chats[j], chats[i]
+	}
+
 	return chats, nil
 }

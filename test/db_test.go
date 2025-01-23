@@ -32,7 +32,7 @@ func TestSaveChat(t *testing.T) {
 	client := setupTestDB()
 	defer teardownTestDB(client)
 
-	db.Connect("mongodb://localhost:27017") // Use the same URI as your test DB
+	db.Connect("mongodb://localhost:27017") // use the same URI as your test DB
 	chat := models.ChatMessage{
 		UserID:    "test_user",
 		Message:   "Hello!",
@@ -78,7 +78,10 @@ func TestGetChatHistory(t *testing.T) {
 	assert.NoError(t, err)
 
 	// fetch chat history
-	history, err := db.GetChatHistory("test_user")
+	history, err := db.GetChatHistory("test_user", 3)
 	assert.NoError(t, err)
-	assert.Len(t, history, 2)
+	assert.Len(t, history, 3)
+	assert.Equal(t, "Hello", history[0].Message)                    // Check the oldest message
+	assert.Equal(t, "How are you?", history[1].Message)             // Check the second message
+	assert.Equal(t, "What's the weather like?", history[2].Message) // Check the most recent message
 }
