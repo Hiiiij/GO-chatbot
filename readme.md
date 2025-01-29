@@ -1,4 +1,4 @@
-# go-chat-bot
+# go-chatbot
 
 A lightweight Go application to connect to OpenAI's API, featuring three simple yet powerful endpoints: `status/`, `stream/`, and `chat/`. Built with a focus on clarity, performance, and ease of use.
 
