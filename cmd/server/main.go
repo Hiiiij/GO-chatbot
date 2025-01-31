@@ -77,7 +77,7 @@ func validateEnvVars(requiredVars []string) {
 func errorHandlingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
-		// Check for errors after the request is processed
+		// check for errors after the request is processed
 		if len(c.Errors) > 0 {
 			for _, e := range c.Errors {
 				log.Error().Err(e).Msg("request error")
