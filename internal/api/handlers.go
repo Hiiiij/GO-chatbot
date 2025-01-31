@@ -3,6 +3,7 @@ package api
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"go-bot/internal/models"
 	"go-bot/internal/service"
@@ -15,14 +16,23 @@ import (
 func handleChat(c *gin.Context) {
 	var chatRequest models.ChatRequest
 	if err := c.ShouldBindJSON(&chatRequest); err != nil {
-		util.RespondWithError(c, http.StatusBadRequest, "invalid chat request")
+		log.Error().Err(err).Msg("Invalid chat request payload")
+		util.RespondWithError(c, http.StatusBadRequest, "Invalid chat request payload")
 		return
 	}
 
-	// use centralized OpenAI request logic
+	// validate the input
+	if strings.TrimSpace(chatRequest.Message) == "" {
+		log.Error().Msg("Chat request message is empty")
+		util.RespondWithError(c, http.StatusBadRequest, "Message cannot be empty")
+		return
+	}
+
+	// centralized OpenAI request logic
 	response, err := service.ProcessChat(chatRequest)
 	if err != nil {
-		util.RespondWithError(c, http.StatusInternalServerError, "failed to process chat")
+		log.Error().Err(err).Msg("Failed to process chat request")
+		util.RespondWithError(c, http.StatusInternalServerError, "Failed to process chat request")
 		return
 	}
 
@@ -32,12 +42,18 @@ func handleChat(c *gin.Context) {
 func handleStream(c *gin.Context) {
 	var chatRequest models.ChatRequest
 	if err := c.ShouldBindJSON(&chatRequest); err != nil {
-		log.Error().Err(err).Msg("Invalid stream request")
-		util.RespondWithError(c, http.StatusBadRequest, "Invalid stream request")
+		log.Error().Err(err).Msg("Invalid stream request payload")
+		util.RespondWithError(c, http.StatusBadRequest, "Invalid stream request payload")
 		return
 	}
 
-	//  process streaming
+	// validate the input
+	if strings.TrimSpace(chatRequest.Message) == "" {
+		log.Error().Msg("Stream request message is empty")
+		util.RespondWithError(c, http.StatusBadRequest, "Message cannot be empty")
+		return
+	}
+
 	streamChannel, err := service.ProcessStream(chatRequest)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to process streaming request")
@@ -45,21 +61,37 @@ func handleStream(c *gin.Context) {
 		return
 	}
 
-	// response back
+	// check if streamChannel exists
+	if streamChannel == nil {
+		log.Error().Msg("Stream channel is nil")
+		util.RespondWithError(c, http.StatusInternalServerError, "Streaming initialization failed")
+		return
+	}
+
+	// stream response
 	c.Stream(func(w io.Writer) bool {
 		for msg := range streamChannel {
-			log.Debug().Str("streamed_message", msg).Msg("Streaming message to client")
-			c.SSEvent("message", msg)
+			cleanMsg := strings.TrimSpace(msg)
+
+			// ignore "[DONE]" token
+			if cleanMsg == "[DONE]" {
+				log.Debug().Msg("Received [DONE] token, closing stream")
+				return false
+			}
+
+			log.Debug().Str("streamed_message", cleanMsg).Msg("Streaming message to client")
+			c.SSEvent("message", cleanMsg)
 		}
 
-		// signal the end of the stream
 		c.SSEvent("done", "Stream completed")
 		return false
 	})
 }
 
-// return the service status
 func handleStatus(c *gin.Context) {
-	log.Info().Msg("status check received")
-	c.JSON(http.StatusOK, gin.H{"status": "service is running"})
+	log.Info().Msg("Status check received")
+	c.JSON(http.StatusOK, gin.H{
+		"status":      "service is running",
+		"status_code": http.StatusOK,
+	})
 }
