@@ -48,6 +48,7 @@ func handleStream(c *gin.Context) {
 	// response back
 	c.Stream(func(w io.Writer) bool {
 		for msg := range streamChannel {
+			log.Debug().Str("streamed_message", msg).Msg("Streaming message to client")
 			c.SSEvent("message", msg)
 		}
 
