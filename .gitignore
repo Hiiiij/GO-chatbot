@@ -1,3 +1,35 @@
-.env
-notes.txt
+# Environment files
+.env*
+!.env.example
+
+# OS files
 .DS_Store
+*.swp
+*.swo
+Thumbs.db
+
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Project specific
+notes.txt
+function.zip
+/vendor/
+/bin/
+/dist/
+
+# IDE specific
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# Logs
+*.log
