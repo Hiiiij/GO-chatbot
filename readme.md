@@ -36,7 +36,7 @@ A lightweight Go application to connect to OpenAI's API, featuring three simple 
 ### Start the server:
 
 ```bash
- go run main.go
+ go run ./cmd/server
 ```
 
 Access the API at http://localhost:8080.
