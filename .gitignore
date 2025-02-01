@@ -20,10 +20,15 @@ go.work
 
 # Project specific
 notes.txt
-function.zip
+**/function.zip
 /vendor/
 /bin/
 /dist/
+
+# Build artifacts
+**/function.zip 
+**/bootstrap     
+**/main         # ignores main binary in any directory
 
 # IDE specific
 .idea/
